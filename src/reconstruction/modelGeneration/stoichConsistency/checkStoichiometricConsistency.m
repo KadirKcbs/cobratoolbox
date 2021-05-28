@@ -126,7 +126,7 @@ solution = solveCobraLP(LPproblem,'printLevel',printLevel);
 %           -1   No solution reported (timelimit, numerical problem etc)
 
 isConsistent=solution.stat;
-epsilon = 1e-4;
+epsilon = getCobraSolverParams('LP', 'feasTol')*100;
 % If the network is not stoichiometrically consistent then one maximizes
 % the number of  positive component of the molecular masses vector
 if isConsistent~=1

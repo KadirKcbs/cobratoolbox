@@ -8,14 +8,14 @@ function solution = solveCobraLP(LPproblem, varargin)
 % INPUT:
 %    LPproblem:     Structure containing the following fields describing the LP problem to be solved
 %
-%                     * .A - LHS matrix
-%                     * .b - RHS vector
-%                     * .c - Objective coeff vector
-%                     * .lb - Lower bound vector
-%                     * .ub - Upper bound vector
-%                     * .osense - Objective sense (-1 means maximise (default), 1 means minimise)
-%                     * .csense - Constraint senses, a string containting the constraint sense for
-%                       each row in A ('E', equality, 'G' greater than, 'L' less than).
+%                     * .A - m x n linear constraint matrix
+%                     * .b - m x 1 right hand sider vector for constraint A*x = b
+%                     * .c - n x 1 linear objective coefficient vector
+%                     * .lb - n x 1 lower bound vector for lb <= x
+%                     * .ub - n x 1 upper bound vector for       x <= ub
+%                     * .osense - scalar objective sense (-1 means maximise (default), 1 means minimise)
+%                     * .csense - m x 1 character array of constraint senses, one for each row in A
+%                                 must be either ('E', equality, 'G' greater than, 'L' less than).
 %
 % OPTIONAL INPUTS:
 %    varargin:      Additional parameters either as parameter struct, or as
@@ -152,11 +152,16 @@ if ~isfield(LPproblem, 'A') && isfield(LPproblem, 'S')
     LPproblem.A = LPproblem.S;
 end
 
-% assume constraint S*v = b if csense not provided
-if ~isfield(LPproblem, 'csense')
+% assume constraint A*v = b if csense not provided
+if isfield(LPproblem, 'csense')
+    bool = LPproblem.csense == 'E' | LPproblem.csense == 'G' | LPproblem.csense == 'L';
+    if any(~bool)
+        error('Incorrect formulation of LPproblem.csense \n%s','LPproblem.csense must be an m x 1 character array containing the constraint sense {''E'',''L'',''G''} corresponding to each row of LPproblem.A')
+    end
+else
     % if csense is not declared in the model, assume that all
     % constraints are equalities.
-    LPproblem.csense(1:length(LPproblem.mets), 1) = 'E';
+    LPproblem.csense(1:size(LPproblem.A,1), 1) = 'E';
 end
 
 % assume constraint S*v = 0 if b not provided
@@ -1340,11 +1345,15 @@ switch solver
         end
                 
         % http://www-eio.upc.edu/lceio/manuals/cplex-11/html/overviewcplex/statuscodes.html
+        % https://www.ibm.com/support/knowledgecenter/SSSA5P_12.5.1/ilog.odms.cplex.help/refmatlabcplex/html/classCplex.html#a93e3891009533aaefce016703acb30d4
         origStat   = CplexLPproblem.Solution.status;
         %stat = origStat;
-        if origStat==1
+        if origStat==1 && isfield(CplexLPproblem.Solution,'dual')
             stat = 1;
             f = CplexLPproblem.Solution.objval;
+            if ~isfield(CplexLPproblem.Solution,'x')
+                disp(CplexLPproblem)
+            end
             x = CplexLPproblem.Solution.x;
             w = osense*CplexLPproblem.Solution.reducedcost;
             y = osense*CplexLPproblem.Solution.dual;
@@ -1529,8 +1538,13 @@ switch solver
         else
             zsize = 1;
         end
-           
-        [z,y,w,inform,~,~,~] = pdco(osense*ceq,Aeq,beq,lbeq,ubeq,d1,d2,options,x0,y0,z0,xsize,zsize);
+        
+        [x,y,w,inform,~,~,~] = pdco(osense*ceq,Aeq,beq,lbeq,ubeq,d1,d2,options,x0,y0,z0,xsize,zsize);
+        
+        if 0%1 for debug
+            norm(Aeq*x - beq,inf)
+            norm(Aeq*x - beq + (d2^2)*y,inf)
+        end
         
         % inform = 0 if a solution is found;
         %        = 1 if too many iterations were required;
@@ -1545,14 +1559,18 @@ switch solver
                 s = zeros(nMet,1);
                 s(csense == 'L' | csense == 'G') = z(nRxn+1:end);
                 s(csense == 'G') = -s(csense == 'G');
+                %switch the sign of the dual to the constraint that was
+                %switched
+                y(csense == 'G') = -y(csense == 'G');
             end
-            x =   z(1:nRxn);
-            w =   w(1:nRxn);
-            if 0%1 for debug
-                norm(A*x + s - b,inf)
+            if 0
+                norm(A*x + s - b + (d2^2)*y,inf)
                 norm(c - A'*y - w,inf)
                 norm(osense*c - A'*y - w,inf)
             end
+            x =   x(1:nRxn);
+            w =   w(1:nRxn);
+
             f = c'*x;
         elseif (inform == 1 || inform == 2 || inform == 3)
             stat = 0;

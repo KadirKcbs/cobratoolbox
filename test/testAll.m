@@ -14,7 +14,7 @@ fprintf(['     \\_____| \\_____/ |_____/ |_|  \\_\\ |_|   |_|   |\n']);
 fprintf('                                                  | \n\n');
 
 % request explicitly from the user to launch test suite locally
-if contains(getenv('HOME'), 'vmhadmin') && contains(getenv('HOME'), 'jenkins')
+if contains(getenv('HOME'), 'vmhadmin') || contains(getenv('HOME'), 'jenkins')
     % Running in CI environment
     fprintf('Running test in Jenkins/CI environment\n');
     
@@ -49,9 +49,6 @@ else
     CBTDIR = fileparts(which('initCobraToolbox.m'));
     cd(CBTDIR);
 end
-
-% include the root folder and all subfolders.
-addpath(genpath([pwd filesep 'test']));
 
 % change to the root folder of The COBRA TOolbox
 cd(CBTDIR);
@@ -286,6 +283,9 @@ end
 
 % switch back to the original directory
 cd(origDir)
-
-% explicit 'exit' required for R2018b in non-interactive mode to avoid SEGV near end of test
-exit
+if contains(getenv('HOME'), 'vmhadmin') || contains(getenv('HOME'), 'jenkins')
+    % Running in CI environment
+    fprintf('Running test in Jenkins/CI environment\n');
+    % explicit 'exit' required for R2018b in non-interactive mode to avoid SEGV near end of test
+    exit
+end

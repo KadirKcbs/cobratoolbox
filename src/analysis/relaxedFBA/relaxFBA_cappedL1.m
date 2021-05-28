@@ -67,7 +67,7 @@ if ~isfield(param,'maxLB')
     param.minLB = min(-max(model.ub),min(model.lb));
 end
 if ~isfield(param,'maxRelaxR')
-    param.maxRelaxR = 1000; %TODO - check this for multiscale models
+    param.maxRelaxR = 1e4; %TODO - check this for multiscale models
 end
 if ~isfield(param,'printLevel')
     param.printLevel = 0; %TODO - check this for multiscale models
@@ -188,51 +188,38 @@ while nbIteration < nbMaxIteration && stop ~= true
     
     if 1
         %Compute x_bar=(v_bar,r_bar,p_bar,q_bar) which belongs to subgradient of second DC component
-        if 0
-            %Minh - maximise
-            v_bar  = sign(v)*(gamma1 + gamma0*theta);
-        else
-            %Ronan - minimise
-            v_bar  = -sign(v)*gamma1;
-            v(abs(v) < one_over_theta) = 0;
-            v_bar = v_bar + sign(v)*gamma0*theta;
-        end
+        v_bar  = -sign(v)*gamma1;
+        v(abs(v) <= one_over_theta) = 0;
+        v_bar = v_bar + sign(v)*gamma0*theta;
         
         r_bar  = -sign(r)*lambda1;
-        r(abs(r) < one_over_theta) = 0;
+        r(abs(r) <= one_over_theta) = 0;
         r_bar = r_bar + sign(r)*lambda0*theta;
         
-        p_bar  = -sign(p)*alpha1;
-        p(p < one_over_theta) = 0;
-        p_bar = p_bar + sign(p)*alpha0*theta;
+        p_bar  = -sign(p).*alpha1;
+        p(p <= one_over_theta) = 0;
+        p_bar = p_bar + sign(p).*alpha0*theta;
         
-        q_bar  = -sign(q)*alpha1;
-        q(q < one_over_theta) = 0;
-        q_bar = q_bar + sign(q)*alpha0*theta;
+        q_bar  = -sign(q).*alpha1;
+        q(q <= one_over_theta) = 0;
+        q_bar = q_bar + sign(q).*alpha0*theta;
     else
-        %Ronan - mimics sparseLP_cappedL1
-        v_bar  = sign(v)*gamma1;
         v(abs(v) < one_over_theta) = 0;
-        v_bar = v_bar + sign(v)*gamma0*theta;
-
-        r_bar  = sign(r)*lambda1;
+        v_bar = -gamma1*sign(v) + sign(v)*gamma0*theta;
+        
         r(abs(r) < one_over_theta) = 0;
-        r_bar = r_bar + sign(r)*lambda0*theta;
+        r_bar = -lamda1*sign(r) + sign(r)*lambda0*theta;
         
-        p_bar  = sign(p)*alpha1;
         p(p < one_over_theta) = 0;
-        p_bar = p_bar + sign(p)*alpha0*theta;
+        p_bar = alpha1*sign(p) + sign(p)*alpha0*theta;
         
-        q_bar  = sign(q)*alpha1;
         q(q < one_over_theta) = 0;
-        q_bar = q_bar + sign(q)*alpha0*theta;
+        q_bar = alpha1*sign(q) + sign(q)*alpha0*theta;
     end
     
     %Solve the sub-linear program to obtain new x
     [v,r,p,q,LPsolution] = relaxFBA_cappedL1_solveSubProblem(model,csense,param,v_bar,r_bar,p_bar,q_bar);
-    %disp([v,p,q])
-    %disp('-')
-    %disp(r)
+    
     switch LPsolution.stat
         case 0
             solution.v = [];
@@ -242,6 +229,29 @@ while nbIteration < nbMaxIteration && stop ~= true
             solution.stat = 0;
             warning('Problem infeasible !');
             break
+        case 1
+            %Check stopping criterion
+            x = [v;r;p;q];
+            error_x = norm(x - x_old);
+            obj_new = relaxFBA_cappedL1_obj(model,v,r,p,q,param);
+            error_obj = abs(obj_new - obj_old);
+            
+            if param.printLevel>0
+                if nbIteration==0
+                    fprintf('%5s%12s%12s%12s%12s%10s%10s%10s%10s\n','itn','obj','obj_old','err(obj)','err(x)','card(v)','card(r)','card(p)','card(q)');
+                end
+                fprintf('%5u%12.5g%12.5g%12.5g%12.5g%10u%10u%10u%10u\n',nbIteration,obj_new,obj_old,error_obj,error_x,nnz(v),nnz(r),nnz(p),nnz(q));
+            end
+            
+            if (error_x < epsilon) || (error_obj < epsilon)
+                stop = true;
+            else
+                obj_old = obj_new;
+            end
+            if theta < 1000
+                theta = theta * 1.5;
+            end
+            nbIteration = nbIteration + 1;
         case 2
             solution.v = [];
             solution.r = [];
@@ -249,35 +259,25 @@ while nbIteration < nbMaxIteration && stop ~= true
             solution.q = [];
             solution.stat = 2;
             error('Problem unbounded !');
-        case 1
-            %Check stopping criterion
-            x = [v;r;p;q];
-            error_x = norm(x - x_old);
-            obj_new = relaxFBA_cappedL1_obj(model,v,r,p,q,param);
-            error_obj = abs(obj_new - obj_old);
-            if (error_x < epsilon) || (error_obj < epsilon)
-                stop = true;
-            else
-                obj_old = obj_new;
-            end
-            if theta < 1000
-                  theta = theta * 1.5;
-            end
-            nbIteration = nbIteration + 1;
-
+        case 3
+            solution.v = v;
+            solution.r = r;
+            solution.p = p;
+            solution.q = q;
+            solution.stat = 3;
+            warning('Numerical issues with final solution, may not be optimal !');
             if param.printLevel>0
-                if nbIteration==1
-                    fprintf('%5s%12.3s%18s%18s%18s%10s%10s%10s%10s\n','itn','obj','err(x)','err(obj)','obj','card(v)','card(r)','card(p)','card(q)');
+                if nbIteration==0
+                    fprintf('%5s%12s%12s%12s%12s%10s%10s%10s%10s\n','itn','obj','obj_old','err(obj)','err(x)','card(v)','card(r)','card(p)','card(q)');
                 end
-                    fprintf('%5u%12.3g%12.5g%12.5g%12.5g%10u%10u%10u%10u\n',nbIteration,obj_new,error_x,error_obj,obj_new,nnz(v),nnz(r),nnz(p),nnz(q));
+                fprintf('%5u%12.5g%12.5g%12.5g%12.5g%10u%10u%10u%10u\n',nbIteration,obj_new,obj_old,error_obj,error_x,nnz(v),nnz(r),nnz(p),nnz(q));
             end
-%             disp(strcat('DCA - Iteration: ',num2str(nbIteration)));
-%             disp(strcat('Obj:',num2str(obj_new)));
-%             disp(strcat('Stopping criteria error: ',num2str(min(error_x,error_obj))));
-%             disp('=================================');
-        end
+            stop = true;
+    end
 end
-
+if param.printLevel>0
+    fprintf('%5s%12s%12s%12s%12s%10s%10s%10s%10s\n','itn','obj','obj_old','err(obj)','err(x)','card(v)','card(r)','card(p)','card(q)');
+end
 if solution.stat == 1
     solution.v = v;
     solution.r = r;
@@ -305,7 +305,7 @@ function [v,r,p,q,solution] = relaxFBA_cappedL1_solveSubProblem(model,csense,par
 
     % Define LP
     % Variables [v r p q t w]
-    obj = [c-v_bar; -r_bar; alpha0*theta*ones(n,1)-p_bar; alpha0*theta*ones(n,1)-q_bar; gamma0*ones(n,1); lambda0*ones(m,1)];%why no theta for gamma0 and lambda0?
+    obj = [c-v_bar; -r_bar; (theta*ones(n,1).*alpha0 -p_bar); (theta*ones(n,1).*alpha0 -q_bar); (ones(n,1).*gamma0); (ones(m,1).*lambda0)];
 
     % Constraints
     %       Sv + r <=> b
@@ -379,8 +379,8 @@ function [v,r,p,q,solution] = relaxFBA_cappedL1_solveSubProblem(model,csense,par
 
         A7 = [D  sparse(n,m) sparse(n,n) sparse(n,n) sparse(n,n)   sparse(n,m) ];
         rhs7 = zeros(n,1);
-        rhs7(toBeUnblockedReactions == 1) = 1e-4;
-        rhs7(toBeUnblockedReactions == -1) = -1e-4;
+        rhs7(toBeUnblockedReactions == 1) = getCobraSolverParams('LP', 'feasTol')*100;
+        rhs7(toBeUnblockedReactions == -1) = -getCobraSolverParams('LP', 'feasTol')*100;
         sense7 = repmat('G', n, 1);
         sense7(toBeUnblockedReactions == -1) = 'L';
 
@@ -477,10 +477,17 @@ function [v,r,p,q,solution] = relaxFBA_cappedL1_solveSubProblem(model,csense,par
     else
         disp(param)
         warning(['solveCobraLP solution status is ' num2str(solution.stat) ', and original status is ' num2str(solution.origStat)])
-        v = [];
-        r = [];
-        p = [];
-        q = [];
+        if solution.stat==3
+            v = solution.full(1:n);
+            r = solution.full(n+1:n+m);
+            p = solution.full(n+m+1:n+m+n);
+            q = solution.full(n+m+n+1:n+m+n+n);
+        else
+            v = [];
+            r = [];
+            p = [];
+            q = [];
+        end
     end
 end
 

@@ -1,4 +1,4 @@
-function [tissueModel,coreRxnBool] = fastcore(model, core, epsilon, printLevel)
+function [tissueModel,coreRxnBool,coreMetBool,coreCtrsBool] = fastcore(model, coreRxnInd, epsilon, printLevel)
 % Use the FASTCORE algorithm ('Vlassis et al, 2014') to extract a context
 % specific model. FASTCORE algorithm defines one set of core
 % reactions that is guaranteed to be active in the extracted model and find
@@ -6,7 +6,7 @@ function [tissueModel,coreRxnBool] = fastcore(model, core, epsilon, printLevel)
 %
 % USAGE:
 %
-%    tissueModel = fastcore(model, core)
+%    tissueModel = fastcore(model, coreRxnInd)
 %
 % INPUTS:
 %    model:             (the following fields are required - others can be supplied)
@@ -15,13 +15,13 @@ function [tissueModel,coreRxnBool] = fastcore(model, core, epsilon, printLevel)
 %                         * ub - `n x 1` Upper bounds
 %                         * rxns   - `n x 1` cell array of reaction abbreviations
 %
-%   core:                indices of reactions in cobra model that are part of the
+%   coreRxnInd:                indices of reactions in cobra model that are part of the
 %                        core set of reactions (called 'C' in 'Vlassis et al,
 %                        2014')
 %
 % OPTIONAL INPUTS:
 %   epsilon:             smallest flux value that is considered nonzero
-%                        (default 1e-4)
+%                        (default getCobraSolverParams('LP', 'feasTol')*100)
 %   printLevel:          0 = silent, 1 = summary, 2 = debug (default - 0)
 %
 % OUTPUT:
@@ -43,10 +43,13 @@ if nargin < 4 || ~exist('printLevel','var')
     printLevel = 0;
 end
 if nargin < 3 || isempty(epsilon)
-    epsilon=1e-4;
+    epsilon=getCobraSolverParams('LP', 'feasTol')*100;
 end
 
-coreSetRxn = core;
+if printLevel > 1
+    tic
+end
+
 model_orig = model;
 
 [nMets,nRxns] = size(model.S);
@@ -54,7 +57,8 @@ model_orig = model;
 LPproblem = buildLPproblemFromModel(model);
 
 %reactions irreversible in the reverse direction
-Ir = find(model.ub<=0);
+Ir = model.lb < 0 & model.ub<=0;
+
 %flip direction of reactions irreversible in the reverse direction
 LPproblem.A(:,Ir) = -LPproblem.A(:,Ir);
 tmp = LPproblem.ub(Ir);
@@ -69,7 +73,7 @@ flipped = false;
 singleton = false;
 
 % Find irreversible core reactions
-J = intersect(coreSetRxn, irrevRxns);
+J = intersect(coreRxnInd, irrevRxns);
 
 if printLevel > 0
     fprintf('|J|=%d  ', length(J));
@@ -78,13 +82,14 @@ end
 %Find all the reactions that are not in the core
 nbRxns = 1:nRxns;
 % Non Core reactions (penalized)
-P = setdiff(nbRxns, coreSetRxn);
+P = setdiff(nbRxns, coreRxnInd);
 
-% Find the minimum of reactions from P that need to be included to
+% Find the minimum of set reactions from P that need to be included to
 % support the irreversible core set of reactions
 [Supp, basis] = findSparseMode(J, P, singleton, model, LPproblem, epsilon);
 
 if ~isempty(setdiff(J, Supp))
+    model.rxns(setdiff(J, Supp))
     error ('fastcore.m Error: Inconsistent irreversible core reactions.\n');
 end
 
@@ -94,7 +99,7 @@ if printLevel > 0
 end
 
 % J is the set of irreversible reactions
-J = setdiff(coreSetRxn, A);
+J = setdiff(coreRxnInd, A);
 if printLevel > 0
     fprintf('|J|=%d  ', length(J));
 end
@@ -156,6 +161,24 @@ end
 coreRxnBool=false(size(model.S,2),1);
 coreRxnBool(A)=1;
 
-toRemove = setdiff(model.rxns,model.rxns(A));
-tissueModel = removeRxns(model_orig, toRemove);
+rxnRemoveList = setdiff(model.rxns,model.rxns(A));
+
+dummyMetBool = contains(model.mets,'dummy_Met_');
+dummyRxnBool = contains(model.rxns,'dummy_Rxn_');
+if any(dummyMetBool) || any(dummyRxnBool)
+    model = destroyDummyModel(model,dummyMetBool,dummyRxnBool);
+    rxnRemoveList = rxnRemoveList(~dummyRxnBool);
+end
+        
+%removes any infeasible coupling constraints also
+[tissueModel, metRemoveList, ctrsRemoveList] = removeRxns(model_orig, rxnRemoveList,'metRemoveMethod','exclusive','ctrsRemoveMethod','infeasible');
+
+coreMetBool=~ismember(model_orig.mets,metRemoveList);
+if isfield(model,'ctrs')
+    coreCtrsBool = ~ismember(model_orig.ctrs,ctrsRemoveList);
+else
+    coreCtrsBool = ctrsRemoveList;
+end
+
+%coreGeneBool
 tissueModel = removeUnusedGenes(tissueModel);

@@ -39,14 +39,22 @@ function [FluxCorrelations, PValues, TaxonomyInfo] = correlateFluxWithTaxonAbund
 %                                     changed flux input to a csv file.
 
 % read the csv file with the abundance data
-abundance = readtable(abundancePath, 'ReadVariableNames', false);
-abundance = table2cell(abundance);
+abundance = table2cell(readtable(abundancePath, 'ReadVariableNames', false));
 if isnumeric(abundance{2, 1})
     abundance(:, 1) = [];
 end
 
-fluxes = readtable(fluxPath, 'ReadVariableNames', false);
-fluxes = table2cell(fluxes);
+fluxes = table2cell(readtable(fluxPath, 'ReadVariableNames', false));
+
+metaboliteDatabase = readtable('MetaboliteDatabase.txt', 'Delimiter', 'tab','TreatAsEmpty',['UND. -60001','UND. -2011','UND. -62011'], 'ReadVariableNames', false);
+metaboliteDatabase=table2cell(metaboliteDatabase);
+
+fluxes(:,1)=strrep(fluxes(:,1),'EX_','');
+fluxes(:,1)=strrep(fluxes(:,1),'(e)','');
+fluxes(:,1)=strrep(fluxes(:,1),'[fe]','');
+% for i=2:size(fluxes,1)
+% fluxes{i,1}=metaboliteDatabase{find(strcmp(metaboliteDatabase(:,1),fluxes{i,1})),2};
+% end
 
 % Get the taxonomy information
 if exist('infoFilePath','var')
@@ -95,9 +103,11 @@ end
 % strain in at least one sample
 
 % Find the right column for the input data (strains, species,..)
+if sum(strncmp(abundance(:,1),'pan',3))==size(abundance,1)-1
 abundance(:,1)=regexprep(abundance(:,1),'pan','','once');
+end
 inputTaxa={};
-for i=2:size(taxonomy,2)
+for i=1:size(taxonomy,2)
     taxa=strrep(taxonomy(:,i),' ','_');
     taxa=strrep(taxa,'.','_');
     taxa=strrep(taxa,'/','_');
@@ -106,6 +116,7 @@ for i=2:size(taxonomy,2)
     if length(intersect(abundance(2:end,1),taxa))==size(abundance,1)-1
         inputTaxa=taxa;
         inputCol=i;
+        break
     end
 end
 if isempty(inputTaxa)
@@ -201,6 +212,13 @@ for t = 1:size(TaxonomyLevels, 1)
         end
     end
     FluxCorrelations.(TaxonomyLevels{t})(delArray,:)=[];
+end
+
+% translate to metabolite descriptions
+for t = 2:size(TaxonomyLevels, 1)
+    for i=2:size(FluxCorrelations.(TaxonomyLevels{t}),2)
+        FluxCorrelations.(TaxonomyLevels{t}){1,i}=metaboliteDatabase{find(strcmp(metaboliteDatabase(:,1),FluxCorrelations.(TaxonomyLevels{t}){1,i})),2};
+    end
 end
 
 % export taxonomical information

@@ -5,7 +5,7 @@ function [rebuiltModel] = rebuildModel(model,database)
 % rBioNet.
 %
 % USAGE
-% [rebuiltModel] = rebuildModel(model)
+% [rebuiltModel] = rebuildModel(model,database)
 %
 % INPUT
 %    model         COBRA model structure
@@ -18,6 +18,12 @@ function [rebuiltModel] = rebuildModel(model,database)
 % .. Authors
 %       - Stefania Magnusdottir, 2016
 %       - Almut Heinken, 12/2018: adapted to function.
+
+% to account for older versions of AGORA
+toReplace={'EX_4hpro(e)','EX_4hpro_LT(e)';'EX_indprp(e)','EX_ind3ppa(e)';'INDPRPt2r','IND3PPAt2r';'EX_adpcbl(e','EX_adocbl(e';'H202D','H2O2D'};
+for i=1:size(toReplace,1)
+    model.rxns=strrep(model.rxns,toReplace{i,1},toReplace{i,2});
+end
 
 model=convertOldStyleModel(model);
 
@@ -33,7 +39,7 @@ rxnFields={
     };
 
 for i=1:length(rxnFields)
-if length(model.(rxnFields{i}))<length(model.rxns)
+if isfield(model,rxnFields{i}) && length(model.(rxnFields{i}))<length(model.rxns)
     if iscell(model.(rxnFields{i}))
     model.(rxnFields{i}){length(model.rxns),1}='';
     elseif isnumeric(model.(rxnFields{i}))
@@ -47,7 +53,7 @@ rbio=struct;
 for i=1:length(model.rxns)
     if ~strncmp('bio',model.rxns{i,1},3)
         % find reaction index
-        rInd=find(ismember(database.reactions(:, 1), model.rxns{i,1}));
+    rInd=find(ismember(database.reactions(:, 1), model.rxns{i,1}));
         model.rxns{i,1}=database.reactions{rInd, 1};
         model.grRules{i,1}=model.grRules{i};
         model.rxnNames{i,1}=database.reactions{rInd, 2};
@@ -81,10 +87,18 @@ rbio.data(:,6)=model.grRules(oldInd);
 rbio.data(:,7)=num2cell(model.lb(oldInd));
 rbio.data(:,8)=num2cell(model.ub(oldInd));
 rbio.data(:,10)=model.subSystems(oldInd);
+if isfield(model,'citations')
 rbio.data(:,11)=model.citations(oldInd);
+end
+if isfield(model,'comments')
 rbio.data(:,12)=model.comments(oldInd);
+end
+if isfield(model,'rxnECNumbers')
 rbio.data(:,13)=model.rxnECNumbers(oldInd);
+end
+if isfield(model,'rxnKEGGID')
 rbio.data(:,14)=model.rxnKEGGID(oldInd);
+end
 rbio.description=cell(7,1);
 
 % build model with rBioNet
@@ -99,7 +113,9 @@ model.citations{end+1,1} = '';
 model.rxnECNumbers{end+1,1} = '';
 model.rxnKEGGID{end+1,1} = '';
 model.rxnConfidenceScores{end+1,1} = '';
+
 % fix incorrect format of PubChemID, metChEBIID, and metKEGGID
+if isfield(model,'metPubChemID')
 for i=1:length(model.metPubChemID)
 model.metPubChemID{i,1}=char(string(model.metPubChemID{i,1}));
 model.metChEBIID{i,1}=char(string(model.metChEBIID{i,1}));
@@ -109,8 +125,14 @@ model.metPubChemID=cellstr(model.metPubChemID);
 model.metChEBIID=cellstr(model.metChEBIID);
 model.metKEGGID=cellstr(model.metKEGGID);
 % fill in descriptions
-model.description.author = 'Molecular Systems Physiology group, www.vmh.life';
+model.description.author = 'Created by DEMETER, Molecular Systems Physiology group';
 model.description.date=date;
+end
+
+% adapt model.subSystems to current standard
+for i=1:length(model.subSystems)
+    model.subSystems{i,1}=char(model.subSystems{i,1});
+end
 
 % set biomass reaction as objective function
 model=changeObjective(model,bAbb);

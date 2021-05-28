@@ -1,10 +1,10 @@
 function solution = optimizeCardinality(problem, param)
-% DC programming for solving the cardinality optimization problem
+%% DC programming for solving the cardinality optimization problem
 % The `l0` norm is approximated by a capped-`l1` function.
 %
 % :math:`min c'(x, y, z) + lambda_0*k.||*x||_0 + lambda_1*o.*||x||_1
 % .                      -  delta_0*d.||*y||_0 +  delta_1*o.*||y||_1` 
-% .                                            +          o.*||z||_1` 
+% .                                            +  alpha_1*o.*||z||_1` 
 % s.t. :math:`A*(x, y, z) <= b`
 % :math:`l <= (x,y,z) <= u`
 % :math:`x in R^p, y in R^q, z in R^r`
@@ -43,10 +43,17 @@ function solution = optimizeCardinality(problem, param)
 %                   * .nbMaxIteration - stopping criteria - number maximal of iteration (Default value = 100)
 %                   * .epsilon - stopping criteria - (Default value = 1e-6)
 %                   * .theta - starting parameter of the approximation (Default value = 0.5) 
-%                              For a sufficiently large parameter , the Capped-L1 approximate problem
-%                              and the original cardinality optimisation problem are have the same set of optimal solutions
+%                              For a sufficiently large parameter, the Capped-L1 approximate problem
+%                              and the original cardinality optimisation
+%                              problem are have the same set of optimal
+%                              solutions. However, starting with a smaller
+%                              theta seems to avoid getting stuck in a
+%                              local minimum. Local minima can be detected
+%                              by checking if running the algorithm
+%                              multiple times gives fifferent solutions. If
+%                              som try reducing theta to e.g. 0.1
 %                   * .thetaMultiplier - at each iteration: theta = theta*thetaMultiplier
-%                   * .eta - Smallest value considered non-zero (Default value feasTol*1000)
+%                   * .eta - Smallest value considered non-zero (Default value feasTol)
 
 %
 % OUTPUT:
@@ -64,7 +71,9 @@ function solution = optimizeCardinality(problem, param)
 %
 % OPTIONAL OUTPUT:
 %    solution:    Structure may also contain the following field:
-%                   * .xyz - 'size(A,2) x 1` solution vector, where model.p,q,r are 'size(A,2) x 1` boolean vectors and 
+%                   * .xyz - 'size(A,2) x 1` solution vector, in same order
+%                   as the columns of problem.A
+%                    where model.p,q,r are 'size(A,2) x 1` boolean vectors and 
 %                     x=solution.xyz(problem.p);
 %                     y=solution.xyz(problem.q);
 %                     z=solution.xyz(problem.r);
@@ -82,9 +91,10 @@ solution.stat = 1;
 if ~exist('param','var') || isempty(param)
     param.nbMaxIteration = 100;
     param.epsilon = getCobraSolverParams('LP', 'feasTol');
-    param.theta   = 0.5;
+    param.theta   = 0.5;%can be volatile, if so try 0.1
     param.thetaMultiplier   = 1.5;
     param.warmStartMethod = 'random';
+    param.regularizeOuter = 0;
 else
     fnames = fieldnames(param);
     incorrectParamFields={'lambda','delta'};
@@ -128,6 +138,9 @@ end
 if ~isfield(param,'condenseT')
     param.condenseT = 1;
 end
+if ~isfield(param,'regularizeOuter')
+    param.regularizeOuter = 1;%by default, regularise outer loop with 1-norm of cardinality optimised variables
+end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%
 if isfield(problem,'lambda') && (isfield(problem,'lambda0') || isfield(problem,'lambda1'))
@@ -161,6 +174,13 @@ if isfield(problem,'lambda0') && ~isfield(problem,'lambda1')
 end
 if isfield(problem,'delta0') && ~isfield(problem,'delta1')
     problem.delta1 = problem.delta0/10;   
+end
+
+%global paramter on one-norm of variables not cardinality optimised
+if ~isfield(problem,'alpha1')
+    %by default do not minimize the one norm of reactions where cardinality
+    %is not being optimised
+    problem.alpha1=0;
 end
 
 if ~isfield(problem,'p')
@@ -282,7 +302,7 @@ if ~isfield(problem,'k')
         end
     else
         if problem.lambda0==0
-            problem.k = ones(length(problem.p),1);
+            problem.k = zeros(length(problem.p),1);
         else
             problem.k = ones(length(problem.p),1);
         end
@@ -324,7 +344,7 @@ if ~isfield(problem,'d')
         end
     else
         if problem.delta0==0
-            problem.d = ones(length(problem.q),1);
+            problem.d = zeros(length(problem.q),1);
         else
             problem.d = ones(length(problem.q),1);
         end
@@ -344,7 +364,7 @@ else
         end
     else
         if length(problem.d) ~= length(problem.p)
-            warning('Error: the size of weight vector k is not correct');
+            warning('Error: the size of weight vector d is not correct');
             solution.stat = -1;
             return;
         else
@@ -357,11 +377,72 @@ else
     end
 end
 
-if ~isfield(problem,'o')
+if isfield(problem,'o')
+    if isempty(problem.o)
+        problem.o = ones(size(problem.A,2),1);
+    else
+        if length(problem.r)==1
+            if length(problem.o) ~= (problem.p + problem.q + problem.r)
+                warning('Error: the size of weight vector d is not correct');
+                solution.stat = -1;
+                return;
+            else
+                if any(problem.o <=0) %& 0
+                    warning('Error: the weight vector o should be strictly positive.');
+                    solution.stat = -1;
+                    return;
+                end
+            end
+        else
+            if length(problem.o) ~= length(problem.p)
+                warning('Error: the size of weight vector o is not correct.');
+                solution.stat = -1;
+                return;
+            else
+                if problem.lambda1~=0
+                    if any(problem.o(problem.p)<=0)
+                        solution.stat = -1;
+                        warning('Error: the weight vector o(problem.p) should be strictly positive.');
+                        return;
+                    end
+                end
+                if problem.delta1~=0
+                    if any(problem.o(problem.q) <=0)
+                        solution.stat = -1;
+                        warning('Error: the weight vector o(problem.q) should be strictly positive.');
+                        return;
+                    end
+                end
+                if problem.alpha1~=0
+                    if any(problem.o(problem.r) <=0)
+                        solution.stat = -1;
+                        warning('Error: the weight vector o(problem.r) should be strictly positive.');
+                        return;
+                    end
+                end
+            end
+        end
+    end
+else
     problem.o = ones(size(problem.A,2),1);
-    %by default do not minimize the one norm of reactions where cardinality
-    %is not being optimised
+end
+
+if problem.lambda1==0
     if length(problem.p)==1
+        problem.o(1:problem.p,1) = 0;
+    else
+        problem.o(problem.p~=0,1) = 0;
+    end
+end
+if problem.delta1==0
+    if length(problem.q)==1
+        problem.o(problem.p+1:problem.p+problem.q,1) = 0;
+    else
+        problem.o(problem.q~=0,1) = 0;
+    end
+end
+if problem.alpha1==0
+    if length(problem.r)==1
         problem.o(problem.p+problem.q+1:problem.p+problem.q+problem.r,1) = 0;
     else
         problem.o(problem.r~=0,1) = 0;
@@ -479,8 +560,8 @@ if ~isfield(param,'checkFeasibility')
     param.checkFeasibility=0;
 end
 
-[nbMaxIteration,epsilon,theta] = deal(param.nbMaxIteration,param.epsilon,param.theta);
-[lambda0,lambda1,delta0,delta1] = deal(problem.lambda0,problem.lambda1,problem.delta0,problem.delta1);
+[nbMaxIteration,epsilon,theta,regularizeOuter] = deal(param.nbMaxIteration,param.epsilon,param.theta,param.regularizeOuter);
+[lambda0,lambda1,delta0,delta1,alpha1] = deal(problem.lambda0,problem.lambda1,problem.delta0,problem.delta1,problem.alpha1);
 s = length(problem.b);
 
 if 0
@@ -518,6 +599,7 @@ if param.condenseT
 else
     qThetaBool = false(q,1);
 end
+
 
 % Bounds for unweighted problem
 % lb <= [x;y;z] <= ub
@@ -654,8 +736,15 @@ end
 %Compute (x_bar,y_bar,z_bar), i.e. subgradient of second DC component  (z_bar = 0)
 
 % subgradient of -lambda1*abs(x) + lambda0*diag(k)*(max{1,theta*abs(x)} -1)
-x(abs(x) <= 1/theta) = 0;
-x_bar = -lambda1*o(1:p).*sign(x) +  theta*lambda0*k.*sign(x);
+if 0
+    x(abs(x) <= 1/theta) = 0;
+    x_bar = -lambda1*o(1:p).*sign(x) +  theta*lambda0*k.*sign(x);
+else
+    x_bar = -lambda1*o(1:p).*sign(x);
+    x(abs(x) <= 1/theta) = 0;
+    x_bar = x_bar +  theta*lambda0*k.*sign(x);
+end
+
 % subgradient of -delta1*abs(y) + theta*delta0*diag(d)*abs(y)
 y_bar = -delta1*o(p+1:p+q).*sign(y)  +  theta*delta0*d.*sign(y);
 
@@ -742,7 +831,7 @@ if param.checkFeasibility
     end
 end
 
-obj_old = optimizeCardinality_cappedL1_obj(x,y,z,c,k,d,o,theta,lambda0,lambda1,delta0,delta1);
+obj_old = optimizeCardinality_cappedL1_obj(x,y,z,c,k,d,o,theta,lambda0,lambda1,delta0,delta1,alpha1,regularizeOuter);
 
 
 
@@ -763,7 +852,7 @@ while nbIteration < nbMaxIteration && stop ~= true
         end
     end
     [x,y,z,LPsolution] = optimizeCardinality_cappedL1_solveSubProblem...
-        (subLPproblem,x,y,s,p,pPosBool,q,r,c,k,d,o,lb,ub,theta,lambda0,lambda1,delta0,delta1,param.printLevel-1,param.condenseT);
+        (subLPproblem,x,y,s,p,pPosBool,q,r,c,k,d,o,lb,ub,theta,lambda0,lambda1,delta0,delta1,alpha1,param.printLevel-1,param.condenseT);
     
 %     %I(s) stands for the set of active constraints at s
 %     dx = x_old - x;
@@ -800,7 +889,7 @@ while nbIteration < nbMaxIteration && stop ~= true
         case 1
             %Check stopping criterion
             delta_x = norm([x;y;z] - [x_old;y_old;z_old]);
-            obj_new = optimizeCardinality_cappedL1_obj(x,y,z,c,k,d,o,theta,lambda0,lambda1,delta0,delta1);
+            obj_new = optimizeCardinality_cappedL1_obj(x,y,z,c,k,d,o,theta,lambda0,lambda1,delta0,delta1,alpha1,regularizeOuter);
             if 0
                 delta_obj = (obj_new - obj_old)/obj_old;
             else
@@ -837,10 +926,12 @@ while nbIteration < nbMaxIteration && stop ~= true
             end
             
             if param.printLevel>0
-                %                      obj = c'*[x;y;z]...
-                %                          + lambda0*ones(p,1)'*spdiags(k,0,p,p)*min(ones(p,1),theta*abs(x))... %Capped-l1 approximate step function (bottom row Table 2.)
-                %                          -  delta0*ones(q,1)'*spdiags(d,0,q,q)*min(ones(q,1),theta*abs(y))...
-                %                          + lambda1*norm(x,1) + delta1*norm(y,1);
+                %      obj = c'*[x;y;z]...
+                %          + lambda0*k'*min(ones(p,1),theta*abs(x))... %Capped-l1 approximate step function (bottom row Table 2.)
+                %          -  delta0*d'*min(ones(q,1),theta*abs(y))...
+                %          + lambda1*o(1:p)'*abs(x)...
+                %          +  delta1*o(p+1:p+q)'*abs(y)...
+                %          +  alpha1*o(p+q+1:p+q+r)'*abs(z);
                 
                 obj_linear = c'*[x;y;z];
                 obj_x0_cap = lambda0*k'*min(ones(p,1),theta*abs(x));
@@ -849,14 +940,50 @@ while nbIteration < nbMaxIteration && stop ~= true
                 obj_y0 =  delta0*d'*(abs(y)>param.eta);
                 obj_x1 = lambda1*o(1:p)'*abs(x);
                 obj_y1 =  delta1*o(p+1:p+q)'*abs(y);
-                
+                obj_z1 =  alpha1*o(p+q+1:p+q+r)'*abs(z);
                 
                 
                 if nbIteration==1
-                    fprintf('%4s%10s%10s%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s%20s\n','itn','theta','||dx||','del_obj','obj','linear','||x||0','a(x)','||x||1','||y||0','a(y)','||y||1','c(x,y)','sec');
+                    fprintf('\n%s\n','optimizeCardinality objective data:')
+                    %fprintf('%12s\t%12s\t%12s\n','global','local','local')
+                    fprintf('\n%u%s\n', p,' min cardinality variables:')
+                    if isempty(k)
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',NaN,' mean(c(p))',NaN,' min(c(p))', NaN,' max(c(p))')
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',lambda0,' lambda0',NaN,' min(k)', NaN,' max(k)')
+                    else
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',mean(c(1:p)),' mean(c(p))',min(c(1:p)),' min(c(p))', max(c(1:p)),' max(c(p))')
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',lambda0,' lambda0',min(k),' min(k)', max(k),' max(k)')
+                    end
+                    if p==0
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',lambda1,' lambda1',NaN,' min(o(p))',NaN,' max(o(p))')
+                    else
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',lambda1,' lambda1',min(o(1:p)),' min(o(p))',max(o(1:p)),' max(o(p))')
+                    end
+                    fprintf('\n%u%s\n', q, ' max cardinality variables:')
+                    if isempty(d)
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',NaN,' mean(c(q))',NaN,' min(c(q))', NaN,' max(c(q))')
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',delta0,' delta0',NaN,' min(d)',NaN,' max(d)')
+                    else
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',mean(c(p+1:p+q)),' mean(c(q))',min(c(p+1:p+q)),' min(c(q))', max(c(p+1:p+q)),' max(c(q))')
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',delta0,' delta0',min(d),' min(d)',max(d),' max(d)')
+                    end
+                    if q==0
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',delta1,' delta1',NaN,' min(o(q))',NaN,' max(o(q))')
+                    else
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',delta1,' delta1',min(o(p+1:p+q)),' min(o(q))',max(o(p+1:p+q)),' max(o(q))')
+                    end
+                    fprintf('\n%u%s\n', r, ' cardinality free variables:')
+                    if r==0
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',NaN,' mean(c(r))',NaN,' min(c(r))', NaN,' max(c(r))')
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n\n',alpha1,' alpha1',NaN,' min(o(r))',NaN,' max(o(r))')
+                    else
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n',mean(c(p+q+1:p+q+r)),' mean(c(r))',min(c(p+q+1:p+q+r)),' min(c(r))', max(c(p+q+1:p+q+r)),' max(c(r))')
+                        fprintf('%12.2g%s\t%12.2g%s\t%12.2g%s\n\n',alpha1,' alpha1',min(o(p+q+1:p+q+r)),' min(o(r))',max(o(p+q+1:p+q+r)),' max(o(r))')
+                    end
+                    fprintf('%4s%10s%10s%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s%20s\n','itn','theta','||dx||','del_obj','obj','linear','||x||0','a(x)','||x||1','||y||0','a(y)','||y||1','c(x,y)','||z||1','sec');
                 end
-                fprintf('%4u%8.2f%12.5g%12.2g%12.2g%12.2g%12g%12.2g%12.2g%12g%12.2g%12.2g%12.2g%20u\n',...
-                    nbIteration,theta,delta_x,delta_obj,obj_new,obj_linear,obj_x0,obj_x0_cap,obj_x1,obj_y0,obj_y0_cap,obj_y1,obj_comp,timeTaken);
+                fprintf('%4u%8.2f%12.5g%12.2g%12.2g%12.2g%12g%12.2g%12.2g%12g%12.2g%12.2g%12.2g%12.2g%20u\n',...
+                    nbIteration,theta,delta_x,delta_obj,obj_new,obj_linear,obj_x0,obj_x0_cap,obj_x1,-obj_y0,-obj_y0_cap,obj_y1,obj_comp,obj_z1,timeTaken);
             end
             
             if totalComplementarityProblem
@@ -904,11 +1031,11 @@ while nbIteration < nbMaxIteration && stop ~= true
     end
 end
 if param.printLevel>0
-    fprintf('%4s%10s%10s%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s%20s\n','itn','theta','||dx||','del_obj','obj','linear','||x||0','a(x)','||x||1','||y||0','a(y)','||y||1','c(x,y)','sec');
+   fprintf('%4s%10s%10s%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s%20s\n','itn','theta','||dx||','del_obj','obj','linear','||x||0','a(x)','||x||1','||y||0','a(y)','||y||1','c(x,y)','||z||1','sec');
 end
-if ~isempty(warningMessage)
+if ~isempty(warningMessage) & 0
     warning(warningMessage)
-    if param.printLevel>0
+    if param.printLevel>1
         LPsolution
     end
 end
@@ -947,13 +1074,19 @@ end
 end
 
 %Solve the linear sub-program to obtain new (x,y,z)
-function [x,y,z,LPsolution] = optimizeCardinality_cappedL1_solveSubProblem(subLPproblem,x,y,s,p,pPosBool,q,r,c,k,d,o,lb,ub,theta,lambda0,lambda1,delta0,delta1,printLevel,condenseT)
+function [x,y,z,LPsolution] = optimizeCardinality_cappedL1_solveSubProblem(subLPproblem,x,y,s,p,pPosBool,q,r,c,k,d,o,lb,ub,theta,lambda0,lambda1,delta0,delta1,alpha1,printLevel,condenseT)
 % variables (x,y,z,w,t)
 
 %Compute subgradient of second DC component (x_bar,y_bar, where z_bar = 0)
-x(abs(x) < 1/theta) = 0;
+if 0
+    x(abs(x) < 1/theta) = 0;
+    x_bar = -lambda1*o(1:p).*sign(x)     +  theta*lambda0*k.*sign(x); %Negative on the lambda1 reversed below
+else
+    x_bar = -lambda1*o(1:p).*sign(x);
+    x(abs(x) <= 1/theta) = 0;
+    x_bar = x_bar +  theta*lambda0*k.*sign(x);
+end
 
-x_bar = -lambda1*o(1:p).*sign(x)     +  theta*lambda0*k.*sign(x); %Negative on the lambda1 reversed below
 y_bar =  -delta1*o(p+1:p+q).*sign(y) +   theta*delta0*d.*sign(y); %Negative on the delta1 reversed below
 
 %no need for auxiliary variable for x where it is constrained to be non-negative
@@ -976,7 +1109,7 @@ ct2 = delta0*d.*ones(q,1);
 ct2(~qThetaBool)=0;
 
 %31st Oct 2020 included weighed one norm minimisation of z variable 
-cz = o(p+q+1:p+q+r);
+cz = alpha1*o(p+q+1:p+q+r);
 
 subLPproblem.c =     [c(1:p)           - x_bar + cw2;... % x
                       c(p+1:p+q)       - y_bar + ct2;... % y
@@ -1030,15 +1163,22 @@ subLPproblem.c =     [c(1:p)           - x_bar + cw2;... % x
 end
 
 %returns the objective function for the outer problem
-function obj = optimizeCardinality_cappedL1_obj(x,y,z,c,k,d,o,theta,lambda0,lambda1,delta0,delta1)
-    p = length(x);
-    q = length(y);
-    r = length(z);
-    %obj = c'*[x;y;z] + lambda0*ones(p,1)'*min(ones(p,1),theta*abs(k.*x)) - delta0*ones(q,1)'*min(ones(q,1),theta*abs(d.*y)) + lambda1*norm(x,1) + delta1*norm(y,1);%Minh
-     obj = c'*[x;y;z]...
-         + lambda0*k'*min(ones(p,1),theta*abs(x))... %Capped-l1 approximate step function (bottom row Table 2.)
-         -  delta0*d'*min(ones(q,1),theta*abs(y))...
-         + lambda1*o(1:p)'*abs(x)...
-         + delta1*o(p+1:p+q)'*abs(y)...
-         + o(p+q+1:p+q+r)'*abs(z);
+function obj = optimizeCardinality_cappedL1_obj(x,y,z,c,k,d,o,theta,lambda0,lambda1,delta0,delta1,alpha1,regularizeOuter)
+p = length(x);
+q = length(y);
+r = length(z);
+%obj = c'*[x;y;z] + lambda0*ones(p,1)'*min(ones(p,1),theta*abs(k.*x)) - delta0*ones(q,1)'*min(ones(q,1),theta*abs(d.*y)) + lambda1*norm(x,1) + delta1*norm(y,1);%Minh
+if regularizeOuter
+    obj = c'*[x;y;z]...
+        + lambda0*k'*min(ones(p,1),theta*abs(x))... %Capped-l1 approximate step function (bottom row Table 2.)
+        -  delta0*d'*min(ones(q,1),theta*abs(y))...
+        + lambda1*o(1:p)'*abs(x)...
+        +  delta1*o(p+1:p+q)'*abs(y)...
+        +  alpha1*o(p+q+1:p+q+r)'*abs(z);
+else
+    obj = c'*[x;y;z]...
+        + lambda0*k'*min(ones(p,1),theta*abs(x))... %Capped-l1 approximate step function (bottom row Table 2.)
+        -  delta0*d'*min(ones(q,1),theta*abs(y))...
+        +  alpha1*o(p+q+1:p+q+r)'*abs(z);
+end
 end

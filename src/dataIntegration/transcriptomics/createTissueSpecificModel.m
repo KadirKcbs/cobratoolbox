@@ -99,7 +99,7 @@ function [tissueModel] = createTissueSpecificModel(model, options, funcModel, ex
 %       options.core                 indices of reactions in cobra model that are part of the
 %                                    core set of reactions
 %       options.epsilon*             smallest flux value that is considered
-%                                    nonzero (default 1e-4)
+%                                    nonzero (default getCobraSolverParams('LP', 'feasTol')*100)
 %       options.printLevel*          0 = silent, 1 = summary, 2 = debug (default 0)
 %
 %   for swiftcore
@@ -114,6 +114,7 @@ function [tissueModel] = createTissueSpecificModel(model, options, funcModel, ex
 %                                    another supported solver is called or 'gurobi' is not available.
 %
 %
+
 % .. Authors:
 %       - Aarash Bordbar 05/15/2009
 %       - IT 10/30/09 Added proceedExp
@@ -121,7 +122,7 @@ function [tissueModel] = createTissueSpecificModel(model, options, funcModel, ex
 %       - AB 08/05/10 Final Corba 2.0 Version
 %       - Anne Richelle, May 2017 - integration of new extraction methods
 %       - Mojtaba Tefagh, March 2019 - integration of swiftcore
-
+%       - Ronan Fleming, Jan 2021 - integration of thermoKernel
 
 if ~exist('exRxnRemove','var') || isempty(exRxnRemove)
     exRxnRemove = [];
@@ -179,11 +180,11 @@ else
             if ~isfield(options,'checkFunctionality'),options.checkFunctionality=0;end
             if ~isfield(options,'eta'),options.eta=1/3;end
             if ~isfield(options,'tol'),options.tol=1e-8;end
-        case 'fastCore'
+        case {'fastCore','fastcore'}
             if ~isfield(options,'core')
                 error('The required option field "core" is not defined for fastCore method')                
             end
-            if ~isfield(options,'epsilon'),options.epsilon=1e-4;end
+            if ~isfield(options,'epsilon'),options.epsilon=getCobraSolverParams('LP', 'feasTol')*100;end
             if ~isfield(options,'printLevel'),options.printLevel=0;end
         case 'swiftcore'
             if ~isfield(options,'core')
@@ -197,6 +198,32 @@ else
             if ~isfield(options,'reduction'),options.reduction=false;end
             if ~isfield(options,'weights'),options.weights=ones(length(model.lb),1);end
             if ~isfield(model,'rev'),model.rev=double(model.lb<0);end
+        case 'thermoKernel'
+            if ~isfield(options,'rxnWeights')
+                if isfield(options,'core')
+                    options.rxnWeights = ones(length(model.lb),1)*0.01;
+                    options.rxnWeights(options.core) = -1; %note the negative sign
+                else
+                    options.rxnWeights=[];
+                    warning('The required option field "rxnWeights" is not defined for thermoKernel method')
+                end
+            end
+            if ~isfield(options,'activeInactiveRxn')
+                options.activeInactiveRxn = [];
+            end
+            if ~isfield(options,'metWeights')
+                options.metWeights=[];
+                fprintf('%\n','The option field "metWeights" is not defined for thermoKernel method')                
+            end
+            if ~isfield(options,'presentAbsentMet')
+                options.presentAbsentMet=[];
+            end
+            if ~isfield(options,'epsilon')
+                options.epsilon=getCobraSolverParams('LP', 'feasTol');
+            end
+            if ~isfield(options,'printLevel')
+                options.printLevel=0;
+            end
     end
 end
 
@@ -222,11 +249,15 @@ switch options.solver
         tissueModel = fastcore(model, options.core, options.epsilon, options.printLevel);
     case 'swiftcore'
         tissueModel = swiftcore(model, options.core, options.weights, options.tol, options.reduction, options.LPsolver);
+    case 'thermoKernel'
+        [tissueModel, ~, ~] = thermoKernel(model, options.activeInactiveRxn, options.rxnWeights, options.presentAbsentMet, options.metWeights, options);
+        funcModel = 0; %already done in thermoKernel
 end
 
 
 if funcModel ==1
-    paramConsistency.epsilon=1e-10;
+    feasTol=getCobraSolverParams('LP', 'feasTol');
+    paramConsistency.epsilon=feasTol;
     paramConsistency.modeFlag=0;
     paramConsistency.method='fastcc';
     givenParams = fieldnames(optionalParams);
@@ -236,7 +267,8 @@ if funcModel ==1
     
     [~,fluxConsistentRxnBool] = findFluxConsistentSubset(tissueModel,paramConsistency);
     remove=tissueModel.rxns(fluxConsistentRxnBool==0);
-    tissueModel = removeRxns(tissueModel,remove);
+    %tissueModel = removeRxns(tissueModel,remove);
+    tissueModel = removeRxns(tissueModel, remove,'metRemoveMethod','exclusive','ctrsRemoveMethod','inclusive');
     tissueModel = removeUnusedGenes(tissueModel);
 end
 

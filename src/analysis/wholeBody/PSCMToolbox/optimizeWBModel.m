@@ -136,7 +136,6 @@ else
 end
 
 allowLoops =1;
-zeroNormApprox = [];
 
 if isempty(param.minNorm) %Linear optimisation
     
@@ -150,8 +149,7 @@ if isempty(param.minNorm) %Linear optimisation
         end
     end
     
-    solution = optimizeCbModel(model, model.osenseStr, param.minNorm, allowLoops, zeroNormApprox, param);
-    
+    solution = optimizeCbModel(model, model.osenseStr, param.minNorm, allowLoops, param);
 elseif isnumeric(param.minNorm) %quadratic optimisation, proceeds in two steps
     
     %check in case there is no linear objective
@@ -184,7 +182,7 @@ elseif isnumeric(param.minNorm) %quadratic optimisation, proceeds in two steps
     
     param.printLevel = getCobraSolverParams('QP','printLevel',param);
     
-    solution = optimizeCbModel(model, model.osenseStr, param.minNorm, allowLoops, zeroNormApprox, param);
+    solution = optimizeCbModel(model, model.osenseStr, param.minNorm, allowLoops, param);
     
     if param.printLevel>0
         fprintf('%s%i\n','First solution.stat = ', solution.stat)
@@ -235,7 +233,7 @@ elseif isnumeric(param.minNorm) %quadratic optimisation, proceeds in two steps
             model.ub=model.ub/1000;
         end
         
-        solution = optimizeCbModel(model, model.osenseStr, param.minNorm, allowLoops, zeroNormApprox, param);
+        solution = optimizeCbModel(model, model.osenseStr, param.minNorm, allowLoops,  param);
         
         
         % rescale the computed solution by the factor of 1000
